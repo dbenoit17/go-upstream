@@ -318,3 +318,100 @@ func (n nat) probablyPrimeLucas() bool {
 	}
 	return false
 }
+
+const (
+	CompositeWithFactor = iota
+	CompositeNotPrimePower
+	ProbablyPrime
+)
+
+func (i Int) ProbablyPrimeMillerRabinEnhanced(reps int, force2 bool) (int, *Int) {
+	if i.neg {
+		return CompositeWithFactor, NewInt(-1)
+	} else if i.Cmp(NewInt(2)) < 0 {
+		return CompositeWithFactor, &i
+	}
+	return i.abs.probablyPrimeMillerRabinEnhanced(reps, force2)
+}
+
+// probablyPrimeMillerRabinEnhanced runs the enhanced version
+// of the Miller-Rabin test, and reports whether a number
+// is probably prime.  If a factor is found, the factor
+// will be returned in the second return slot.
+func (n nat) probablyPrimeMillerRabinEnhanced(reps int, force2 bool) (int, *Int) {
+	//& (w-1)
+	nm1 := nat(nil).sub(n, natOne)
+	// determine q, k such that nm1 = q << k
+	//& k=a
+	k := nm1.trailingZeroBits()
+	//& q=2^a
+	q := nat(nil).shr(nm1, k)
+
+	nm3 := nat(nil).sub(nm1, natTwo)
+	rand := rand.New(rand.NewSource(int64(n[0])))
+
+	var x, y, quotient nat
+	nm3Len := nm3.bitLen()
+
+NextRandom:
+	for i := 0; i < reps; i++ {
+		if i == reps-1 && force2 {
+			x = x.set(natTwo)
+		} else {
+			// x = b
+			x = x.random(rand, nm3, nm3Len)
+			x = x.add(x, natTwo)
+			g := new(Int).GCD(nil, nil, &Int{false, x}, &Int{false, n})
+			if g.Cmp(intOne) == 1 {
+				// RETURN provably composite with factor g
+				return CompositeWithFactor, g
+			}
+		}
+		//& z = b^m mod w,
+		y = y.expNN(x, q, n, false)
+		//% 4.6
+		if y.cmp(natOne) == 0 || y.cmp(nm1) == 0 {
+			continue
+		}
+		for j := uint(1); j < k; j++ {
+			// 4.7.2
+			yt := nat(nil).set(y)
+			y = y.sqr(y)
+			quotient, y = quotient.div(y, y, n)
+			//% 4.7.3
+			if y.cmp(nm1) == 0 {
+				continue NextRandom
+			}
+			// 4.7.4
+			if y.cmp(natOne) == 0 {
+				yt = nat(nil).sub(yt, natOne)
+				g := new(Int).GCD(nil, nil, &Int{false, yt}, &Int{false, n})
+				if g.Cmp(intOne) == 1 {
+					// RETURN provably composite with factor g
+					return CompositeWithFactor, g
+				}
+				// return provably composite and not power of prime
+				return CompositeNotPrimePower, nil
+			}
+		}
+		// 4.8
+		yt := nat(nil).set(y)
+		y = y.sqr(y)
+		// 4.9
+		quotient, y = quotient.div(y, y, n)
+		//% 4.10
+		if y.cmp(nm1) == 1 {
+			// 4.11
+			yt.set(y)
+		}
+		// 4.7.4
+		yt = yt.sub(yt, natOne)
+		g := new(Int).GCD(nil, nil, &Int{false, yt}, &Int{false, n})
+		if g.Cmp(intOne) == 1 {
+			return CompositeWithFactor, g
+		}
+		return CompositeNotPrimePower, nil
+	}
+
+	return ProbablyPrime, nil
+}

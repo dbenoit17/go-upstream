@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto"
+	"crypto/internal/bigmod"
 	"crypto/internal/cryptotest"
 	"crypto/rand"
 	. "crypto/rsa"
@@ -21,6 +22,81 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestGCDEuclid(t *testing.T) {
+	// Generate 100 random integer pairs,
+	// and compare against (*big.Int).GCD().
+	testGCD := func(e1 int64, e2 int64) {
+		max1 := new(big.Int).Exp(big.NewInt(2), big.NewInt(e1), nil)
+		max2 := new(big.Int).Exp(big.NewInt(2), big.NewInt(e2), nil)
+		// g1: GCD via big.Int
+		a1, err := rand.Int(rand.Reader, max1)
+		if err != nil {
+			t.Errorf("rand.Int: %v", err)
+		}
+		b1, err := rand.Int(rand.Reader, max2)
+		if err != nil {
+			t.Errorf("rand.Int: %v", err)
+		}
+		gi := new(big.Int).GCD(nil, nil, a1, b1)
+
+		// g2: GCD via bigmod.Nat
+		a2 := new(bigmod.Nat)
+		b2 := new(bigmod.Nat)
+		a2.SetBytesNoMod(a1.Bytes())
+		b2.SetBytesNoMod(b1.Bytes())
+		g2, err := GCDEuclid(a2, b2)
+		if err != nil {
+			t.Fatalf("%v", err)
+		}
+
+		// Convert g1 to a Nat for direct comparison
+		g1 := new(bigmod.Nat)
+		g1.SetBytesNoMod(gi.Bytes())
+		bigmod.ForceExpandOperands(g1, g2)
+		if g1.Equal(g2) == 0 {
+			//t.Logf("%v: %v", g1.String(), g2.String())
+			t.Errorf("GCDEuclid: bad result")
+		}
+	}
+	for _ = range 100 {
+		testGCD(32, 32)
+		testGCD(64, 64)
+		testGCD(128, 128)
+		testGCD(512, 512)
+	}
+	for _ = range 25 {
+		testGCD(2048, 2048)
+	}
+}
+
+func TestPartialValidationSP80089(t *testing.T) {
+	testValidate := func(size int, strength int, expectSuccess bool) {
+		priv, err := GenerateKey(rand.Reader, size)
+		if err != nil {
+			t.Fatalf("Could not generate key")
+		}
+		err = priv.PublicKey.PartialValidate(strength)
+		if expectSuccess {
+			if err == nil {
+				t.Errorf("bad reject")
+			}
+		} else {
+			if err == nil {
+				t.Errorf("bad accept")
+			}
+		}
+	}
+	// Test invalid keys fail
+	testValidate(128, 0, false)
+	testValidate(1024, 0, false)
+	// Test valid keys with desired strength pass
+	testValidate(2048, 112, true)
+	testValidate(3072, 128, true)
+	// Test valid keys without desired strength fail
+	testValidate(2048, 80, false)
+	testValidate(3072, 200, false)
+}
 
 func TestKeyGeneration(t *testing.T) {
 	for _, size := range []int{128, 1024, 2048, 3072} {

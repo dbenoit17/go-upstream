@@ -194,6 +194,38 @@ func TestLucasPseudoprimes(t *testing.T) {
 		[]int{989, 3239, 5777, 10877, 27971, 29681, 30739, 31631, 39059, 72389, 73919, 75077})
 }
 
+func TestMillerRabinEnhanced(t *testing.T) {
+	testPseudoprimes(t, "probablyPrimeMillerRabinEnhanced",
+		func(n nat) bool {
+			result, _ := n.probablyPrimeMillerRabinEnhanced(1, true)
+			return result == ProbablyPrime && !n.probablyPrimeLucas()
+		},
+		// https://oeis.org/A001262
+		[]int{2047, 3277, 4033, 4681, 8321, 15841, 29341, 42799, 49141, 52633, 65281, 74665, 80581, 85489, 88357, 90751})
+	for _, s := range composites {
+		s := strings.Map(cutSpace, s)
+		c, _ := new(Int).SetString(s, 10)
+		result, factor := c.ProbablyPrimeMillerRabinEnhanced(10, true)
+		switch result {
+		case CompositeNotPrimePower:
+			// TODO: implement check for perfect power
+			continue
+		case CompositeWithFactor:
+			zero := NewInt(0)
+			if factor.Cmp(zero) == 0 {
+				continue
+			}
+			_, r := c.DivMod(c, factor, zero)
+			if r.Cmp(zero) != 0 {
+				t.Errorf("Got bad factor")
+			}
+		case ProbablyPrime:
+			t.Errorf("Known composite tested prime")
+
+		}
+	}
+}
+
 func testPseudoprimes(t *testing.T, name string, cond func(nat) bool, want []int) {
 	n := nat{1}
 	for i := 3; i < 100000; i += 2 {

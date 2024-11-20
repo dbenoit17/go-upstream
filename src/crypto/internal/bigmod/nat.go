@@ -63,6 +63,20 @@ func NewNat() *Nat {
 	return &Nat{limbs}
 }
 
+// Given two operands, resize the smaller one
+// to the same size as the larger.  This is primarily
+// to facilitate migration from big.Int to bigmod.Nat
+// for operations that don't require a modulus.
+func ForceExpandOperands(x *Nat, y *Nat) {
+	xlen := len(x.limbs)
+	ylen := len(y.limbs)
+	if xlen < ylen {
+		x.expand(ylen)
+	} else if ylen > xlen {
+		x.expand(ylen)
+	}
+}
+
 // expand expands x to n limbs, leaving its value unchanged.
 func (x *Nat) expand(n int) *Nat {
 	if len(x.limbs) > n {
@@ -112,11 +126,39 @@ func (x *Nat) resetToBytes(b []byte) *Nat {
 	return x
 }
 
+
+func (x *Nat) Set(y *Nat) *Nat {
+	return x.set(y)
+}
+
 // set assigns x = y, optionally resizing x to the appropriate size.
 func (x *Nat) set(y *Nat) *Nat {
 	x.reset(len(y.limbs))
 	copy(x.limbs, y.limbs)
 	return x
+}
+
+// BytesUnsafe returns x as a zero-extended big-endian byte slice. The size of the
+// slice will match the size of m.
+//
+// x must have the same size as m and it must be reduced modulo m.
+func (x *Nat) BytesUnsafe() []byte {
+	i := len(x.limbs) * _W
+	bytes := make([]byte, i)
+	for _, limb := range x.limbs {
+		for j := 0; j < _S; j++ {
+			i--
+			if i < 0 {
+				if limb == 0 {
+					break
+				}
+				panic("bigmod: buffer too small")
+			}
+			bytes[i] = byte(limb)
+			limb >>= 8
+		}
+	}
+	return bytes
 }
 
 // Bytes returns x as a zero-extended big-endian byte slice. The size of the
@@ -183,6 +225,14 @@ func bigEndianUint(buf []byte) uint {
 	}
 	return uint(byteorder.BeUint32(buf))
 }
+func (x *Nat) SetBytesNoMod(b []byte) (*Nat, error) {
+	x.resetToBytes(b)
+	err := x.setBytes(b)
+	if err != nil {
+		return nil, err
+	}
+	return x, nil
+}
 
 func (x *Nat) setBytes(b []byte) error {
 	i, k := len(b), 0
@@ -234,6 +284,29 @@ func (x *Nat) IsZero() choice {
 //
 // Both operands must have the same announced length.
 func (x *Nat) cmpGeq(y *Nat) choice {
+	c := x.subCarry(y)
+	// If there was a carry, then subtracting y underflowed, so
+	// x is not greater than or equal to y.
+	return not(choice(c))
+}
+
+// Cmp compares x and y and returns the result of the compare:
+// 1 if x > y
+// 0 if x == y
+// -1 if x < y
+func (x *Nat) Cmp(y *Nat) int {
+	if x.Equal(y) == yes {
+		return 0
+	}
+	c := x.subCarry(y)
+	res := 1
+	if c > 0 {
+		res = -1
+	}
+	return res
+}
+
+func (x *Nat) subCarry(y *Nat) uint {
 	// Eliminate bounds checks in the loop.
 	size := len(x.limbs)
 	xLimbs := x.limbs[:size]
@@ -245,7 +318,7 @@ func (x *Nat) cmpGeq(y *Nat) choice {
 	}
 	// If there was a carry, then subtracting y underflowed, so
 	// x is not greater than or equal to y.
-	return not(choice(c))
+	return c
 }
 
 // assign sets x <- y if on == 1, and does nothing otherwise.
@@ -264,6 +337,10 @@ func (x *Nat) assign(on choice, y *Nat) *Nat {
 	return x
 }
 
+func (x *Nat) AddNoMod(y *Nat) (c uint) {
+	return x.add(y)
+}
+
 // add computes x += y and returns the carry.
 //
 // Both operands must have the same announced length.
@@ -277,6 +354,10 @@ func (x *Nat) add(y *Nat) (c uint) {
 		xLimbs[i], c = bits.Add(xLimbs[i], yLimbs[i], c)
 	}
 	return
+}
+
+func (x *Nat) SubNoMod(y *Nat) (c uint) {
+	return x.sub(y)
 }
 
 // sub computes x -= y. It returns the borrow of the subtraction.
@@ -387,6 +468,33 @@ func NewModulus(b []byte) (*Modulus, error) {
 	}
 	m := &Modulus{}
 	m.nat = NewNat().resetToBytes(b)
+	m.leading = _W - bitLen(m.nat.limbs[len(m.nat.limbs)-1])
+	m.m0inv = minusInverseModW(m.nat.limbs[0])
+	m.rr = rr(m)
+	return m, nil
+}
+
+// NewModulusUnsafe creates a new Modulus from a slice of big-endian bytes.
+// Even values are accepted
+func NewModulusUnsafe(b []byte) (*Modulus, error) {
+	if len(b) == 0 {
+		return nil, errors.New("modulus must be > 0 and odd")
+	}
+	m := &Modulus{}
+	m.nat = NewNat().resetToBytes(b)
+	m.leading = _W - bitLen(m.nat.limbs[len(m.nat.limbs)-1])
+	m.m0inv = minusInverseModW(m.nat.limbs[0])
+	m.rr = rr(m)
+	return m, nil
+}
+
+func ModulusFromNatUnsafe(n * Nat) (*Modulus, error) {
+	if n.IsZero() == 1 {
+		return nil, errors.New("modulus must be > 0")
+	}
+	m := &Modulus{}
+	m.nat = NewNat()
+	m.nat.Set(n)
 	m.leading = _W - bitLen(m.nat.limbs[len(m.nat.limbs)-1])
 	m.m0inv = minusInverseModW(m.nat.limbs[0])
 	m.rr = rr(m)

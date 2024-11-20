@@ -778,3 +778,99 @@ func decryptOAEP(hash, mgfHash hash.Hash, random io.Reader, priv *PrivateKey, ci
 
 	return rest[index+1:], nil
 }
+
+// GCDEuclid returns the greatest common divisor of two *Nats
+// via Euclidian modulo.
+func GCDEuclid(a *bigmod.Nat, b *bigmod.Nat) (*bigmod.Nat, error) {
+	for b.IsZero() == 0 {
+		bmod, err := bigmod.NewModulusUnsafe(b.BytesUnsafe())
+		if err != nil {
+			return nil, err
+		}
+		out := new(bigmod.Nat)
+		out.Mod(a, bmod)
+		a = b
+		b = out
+	}
+	return a, nil
+}
+
+// RSASecurityStrength implements the approximate maximum
+// security strength for a given key size based on
+// SP 800-56 Appendix D.
+func RSASecurityStrength(nbits int) (int, error) {
+	// Common sizes outlined in SP 800-56 Table 4
+	switch nbits {
+	case 1024:
+		return 80, nil
+	case 2048:
+		return 112, nil
+	case 3072:
+		return 128, nil
+	case 4096:
+		return 152, nil
+	case 6144:
+		return 176, nil
+	case 8192:
+		return 200, nil
+	}
+	// There is an algorithm defined in SP 800-56 to derive
+	// security strengths from arbitrary moduli, but since
+	// boringcrypto already didn't support intermediate key sizes,
+	// we can keep the initial implementation simple and
+	// address those later if needed.
+	return -1, errors.New("Unsupported modulus size")
+}
+
+const (
+	RSA_FIPS_MIN_KEY_STRENGTH int = 112
+)
+
+// PartialValidatePublicKey performs partial validation
+// of a public key as defined by SP 800-89 5.3.3
+func (key *PublicKey) PartialValidate(strength int) error {
+	if key.N == nil {
+		return errors.New("got nil modulus")
+	}
+	N, err := bigmod.NewModulus(key.N.Bytes())
+	if err != nil {
+		return err
+	}
+	// 5.3.3 a) Validate modulus length and strength
+	nbits := N.BitLen()
+	Nstrength, err := RSASecurityStrength(nbits)
+	if strength < RSA_FIPS_MIN_KEY_STRENGTH ||
+		Nstrength != -1 && Nstrength != strength {
+		return errors.New("invalid modulus strength")
+	}
+	// 5.3.3 b/c) Validate exponent E is odd and
+	// falls within 2^16 < E < 2^256.  Since
+	// we know (*PublicKey).E is an int, we only
+	// have to check the lower bound.  N is already
+	// proven odd by the check in bigmod.NewModulus().
+	if (key.E&1) == 1 || key.E <= (2<<16) {
+		return errors.New("invalid exponent")
+	}
+
+	// TODO: 5.3.3 d/e Not composite or power of prime via Enhanced Miller Rabin
+	// ...
+
+	// 5.3.3 f) Validate no very small factors
+	// testComposite is the product of primes from 3 to 751.
+	testComposite := new(bigmod.Nat)
+	testComposite.SetBytesNoMod([]byte("1451887755777639901511587432083070202422614380984889313550570919659315177065956574359078912654149167643992684236991305777574330831666511589145701059710742276692757882915756220901998212975756543223550490431013061082131040808010565293748926901442915057819663730454818359472391642885328171302299245556663073719855"))
+	nn := N.Nat()
+	bigmod.ForceExpandOperands(nn, testComposite)
+	g, err := GCDEuclid(testComposite, nn)
+	if err != nil {
+		return errors.New("could not get gcd")
+	}
+	one := new(bigmod.Nat)
+	one.SetBytesNoMod(bigOne.Bytes())
+	bigmod.ForceExpandOperands(g, one)
+	if g.Equal(one) == 0 {
+		return errors.New("invalid public key: small prime factor")
+	}
+
+	return nil
+}

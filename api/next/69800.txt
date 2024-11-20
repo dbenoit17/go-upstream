@@ -1,0 +1,6 @@
+pkg crypto/rsa, const RSA_FIPS_MIN_KEY_STRENGTH int #69800
+pkg crypto/rsa, func GCDEuclid(*bigmod.Nat, *bigmod.Nat) *bigmod.Nat #69800
+pkg crypto/rsa, method (*PrivateKey) PartialValidate(int) error
+pkg crypto/rsa, method (*PublicKey) PartialValidate(int) error
+pkg crypto/rsa, func RSASecurityStrength(int) (int, error) #69800
+pkg crypto/rsa, const RSA_FIPS_MIN_KEY_STRENGTH = 112 #69800
